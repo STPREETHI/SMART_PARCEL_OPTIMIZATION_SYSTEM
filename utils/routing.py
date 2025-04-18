@@ -3,7 +3,7 @@ import requests
 import json
 import numpy as np
 import polyline
-from math import radians, sin, cos, sqrt, atan2
+from math import radians, sin, cos, sqrt, atan2, inf
 
 def geocode_location(city_name):
     """
@@ -141,11 +141,106 @@ def format_duration(seconds):
     else:
         return f"{int(minutes)}m {int(seconds)}s"
 
+def branch_and_bound_tsp(distance_matrix):
+    """
+    Branch and Bound algorithm for the Traveling Salesperson Problem.
+    Finds an optimal route visiting all locations starting and ending at the depot.
+    
+    Args:
+        distance_matrix: Matrix of distances between all pairs of locations
+        
+    Returns:
+        Tuple of (optimal_path, optimal_cost)
+    """
+    n = len(distance_matrix)  # Number of cities
+    
+    # Initialize global variables
+    optimal_path = []
+    optimal_cost = float('inf')
+    
+    # Helper function to calculate the lower bound for a partial path
+    def calculate_lower_bound(path, visited):
+        current = path[-1]
+        lb = sum(distance_matrix[i][j] for i, j in zip(path[:-1], path[1:]))  # Cost of current path
+        
+        # Add minimum outgoing edge for each unvisited node
+        for i in range(n):
+            if not visited[i]:
+                min_edge = float('inf')
+                for j in range(n):
+                    if j != i and distance_matrix[i][j] < min_edge:
+                        min_edge = distance_matrix[i][j]
+                lb += min_edge
+                
+        # Add minimum edge from current to an unvisited node
+        if n - len(path) > 0:  # If there are unvisited nodes
+            min_edge = float('inf')
+            for i in range(n):
+                if not visited[i] and distance_matrix[current][i] < min_edge:
+                    min_edge = distance_matrix[current][i]
+            lb += min_edge
+        
+        # Add minimum edge from an unvisited node to depot
+        if n - len(path) > 0:  # If there are unvisited nodes
+            min_edge = float('inf')
+            for i in range(n):
+                if not visited[i] and distance_matrix[i][0] < min_edge:
+                    min_edge = distance_matrix[i][0]
+            lb += min_edge
+        elif len(path) == n:  # All nodes visited, add cost to return to depot
+            lb += distance_matrix[current][0]
+            
+        return lb
+    
+    # Recursive branch and bound function
+    def branch_and_bound(path, cost, visited):
+        nonlocal optimal_path, optimal_cost
+        
+        # If all nodes have been visited
+        if len(path) == n:
+            # Add cost to return to depot (node 0)
+            total_cost = cost + distance_matrix[path[-1]][0]
+            if total_cost < optimal_cost:
+                optimal_cost = total_cost
+                optimal_path = path.copy()  # Make a copy of the path
+            return
+        
+        # Calculate lower bound for current partial path
+        lower_bound = calculate_lower_bound(path, visited)
+        
+        # Prune if lower bound exceeds the current optimal cost
+        if lower_bound >= optimal_cost:
+            return
+        
+        # Try adding each unvisited node to the path
+        current = path[-1]
+        for next_node in range(n):  # Consider all nodes (not just starting from 1)
+            if not visited[next_node]:
+                visited[next_node] = True
+                new_cost = cost + distance_matrix[current][next_node]
+                
+                # Recurse only if the new cost doesn't exceed optimal_cost
+                if new_cost < optimal_cost:
+                    branch_and_bound(path + [next_node], new_cost, visited)
+                
+                visited[next_node] = False
+    
+    # Start from the depot (node 0)
+    visited = [False] * n
+    visited[0] = True
+    branch_and_bound([0], 0, visited)
+    
+    # If we found a solution, add the return to depot
+    if optimal_path:
+        return optimal_path, optimal_cost
+    else:
+        # Fallback to simple ordering if no solution found
+        return list(range(n)), float('inf')
+
 def calculate_shortest_paths_dijkstra(locations):
     """
-    Calculate shortest paths between all locations using Dijkstra's algorithm,
-    implemented by calling the OpenRouteService API for real-world routing.
-    Also handles ordering of visits using a greedy nearest neighbor approach.
+    Calculate shortest paths between all locations using real-world routing,
+    then optimize the route using Branch and Bound for TSP.
     
     Args:
         locations: List of location dictionaries, starting with the origin
@@ -185,15 +280,14 @@ def calculate_shortest_paths_dijkstra(locations):
                         'coordinates': []
                     }
     
-    # Use greedy algorithm (nearest neighbor) to determine visit order
-    ordered_indices = [0]  # Start with the origin
-    unvisited = list(range(1, n))
+    # Create distance matrix for Branch and Bound TSP
+    distance_matrix = [[shortest_paths[i][j]['distance'] if i != j else 0 for j in range(n)] for i in range(n)]
     
-    while unvisited:
-        current = ordered_indices[-1]
-        next_idx = min(unvisited, key=lambda i: shortest_paths[current][i]['distance'])
-        ordered_indices.append(next_idx)
-        unvisited.remove(next_idx)
+    # Solve TSP using Branch and Bound
+    optimal_path, _ = branch_and_bound_tsp(distance_matrix)
+    
+    # Check if optimal path was found (should always be the case now with the fallback)
+    ordered_indices = optimal_path
     
     # Calculate total distance and collect coordinates for the entire route
     total_distance = 0

@@ -71,50 +71,90 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-def knapsack_algorithm(parcels_df, max_weight):
+def merge_sort(arr):
     """
-    Implementation of 0/1 Knapsack algorithm to select the most valuable parcels 
+    Implementation of merge sort algorithm to sort parcels by value/weight ratio.
+    Uses divide and conquer approach.
+    
+    Args:
+        arr: Array of dictionaries containing parcel data
+        
+    Returns:
+        Sorted array
+    """
+    if len(arr) <= 1:
+        return arr
+    
+    # Divide the array into two halves
+    mid = len(arr) // 2
+    left = merge_sort(arr[:mid])
+    right = merge_sort(arr[mid:])
+    
+    # Merge the sorted halves
+    return merge(left, right)
+
+def merge(left, right):
+    """
+    Merge two sorted arrays based on value/weight ratio.
+    
+    Args:
+        left: Left sorted array
+        right: Right sorted array
+        
+    Returns:
+        Merged sorted array
+    """
+    result = []
+    i = j = 0
+    
+    # Compare elements from both arrays and merge them in descending order of value/weight ratio
+    while i < len(left) and j < len(right):
+        left_ratio = left[i]['value'] / left[i]['weight']
+        right_ratio = right[j]['value'] / right[j]['weight']
+        
+        if left_ratio >= right_ratio:
+            result.append(left[i])
+            i += 1
+        else:
+            result.append(right[j])
+            j += 1
+    
+    # Add remaining elements
+    result.extend(left[i:])
+    result.extend(right[j:])
+    
+    return result
+
+def greedy_knapsack(parcels, max_weight):
+    """
+    Implementation of Greedy Knapsack algorithm to select the most valuable parcels 
     without exceeding the maximum weight limit.
     
     Args:
-        parcels_df: DataFrame containing parcel data including weight and value
+        parcels: List of dictionaries containing parcel data including weight and value
         max_weight: Maximum total weight that can be carried
         
     Returns:
         List of selected parcel indices
     """
-    n = len(parcels_df)
-    weights = parcels_df['weight'].tolist()
-    values = parcels_df['value'].tolist()
+    # Calculate value/weight ratio for each parcel
+    for i, parcel in enumerate(parcels):
+        parcel['ratio'] = parcel['value'] / parcel['weight']
+        parcel['original_index'] = i
     
-    # Convert max_weight to an integer by scaling
-    scale_factor = 1000
-    weights_scaled = [int(w * scale_factor) for w in weights]
-    max_weight_scaled = int(max_weight * scale_factor)
+    # Sort parcels by value/weight ratio using Merge Sort (descending)
+    sorted_parcels = merge_sort(parcels)
     
-    # Initialize DP table
-    dp = [[0 for _ in range(max_weight_scaled + 1)] for _ in range(n + 1)]
-    
-    # Fill the DP table
-    for i in range(1, n + 1):
-        for w in range(max_weight_scaled + 1):
-            if weights_scaled[i-1] <= w:
-                dp[i][w] = max(
-                    values[i-1] + dp[i-1][w-weights_scaled[i-1]], 
-                    dp[i-1][w]
-                )
-            else:
-                dp[i][w] = dp[i-1][w]
-    
-    # Backtrack to find selected items
     selected_parcels = []
-    w = max_weight_scaled
-    for i in range(n, 0, -1):
-        if dp[i][w] != dp[i-1][w]:
-            selected_parcels.append(i-1)
-            w -= weights_scaled[i-1]
+    current_weight = 0
     
-    return selected_parcels[::-1]  # Reverse to maintain original order
+    # Greedily select parcels with highest value/weight ratio
+    for parcel in sorted_parcels:
+        if current_weight + parcel['weight'] <= max_weight:
+            selected_parcels.append(parcel['original_index'])
+            current_weight += parcel['weight']
+    
+    return selected_parcels
 
 def display_route_map(locations, route_coordinates):
     """
@@ -159,9 +199,9 @@ def main():
     <div class="info-box">
     Optimize your delivery operations using advanced algorithms:
     <ul>
-        <li>0/1 Knapsack algorithm for optimal parcel selection</li>
-        <li>Nearest Neighbor algorithm for route optimization</li>
-        <li>Dijkstra algorithm for shortest paths between selected cities</li>
+        <li>Greedy Knapsack algorithm for optimal parcel selection</li>
+        <li>Merge Sort algorithm for sorting parcels by value/weight ratio</li>
+        <li>Branch and Bound algorithm for route optimization (TSP)</li>
         <li>Real-world routing using OpenRouteService API</li>
     </ul>
     </div>
@@ -290,9 +330,12 @@ def main():
                         else:
                             st.warning(f"Could not geocode city: {row['city']}")
                     
-                    # Step 2: Apply Knapsack algorithm to select parcels
+                    # Step 2: Apply Greedy Knapsack algorithm to select parcels
                     locations_df = pd.DataFrame(locations[1:])  # Exclude starting point
-                    selected_indices = knapsack_algorithm(locations_df, max_weight)
+                    
+                    # Convert DataFrame to list of dictionaries for greedy knapsack
+                    parcels_list = locations_df.to_dict('records')
+                    selected_indices = greedy_knapsack(parcels_list, max_weight)
                     
                     if not selected_indices:
                         st.error("No parcels could be selected within the weight constraint.")
@@ -316,11 +359,11 @@ def main():
                     """, unsafe_allow_html=True)
                     st.dataframe(selected_parcels)
                     
-                    # Step 3: Apply Dijkstra algorithm for shortest paths between selected cities
+                    # Step 3: Apply Branch and Bound algorithm for TSP
                     st.subheader("Shortest Paths Between Selected Cities")
                     
                     # Create graph from selected locations
-                    with st.spinner("Calculating shortest paths..."):
+                    with st.spinner("Calculating shortest paths using Branch and Bound..."):
                         # Include only the starting location and selected parcels
                         shortest_paths, total_distance, ordered_visits, route_coordinates, total_duration = calculate_shortest_paths_dijkstra(selected_locations)
                         
@@ -338,11 +381,19 @@ def main():
                             st.subheader("Delivery Route Details")
                             route_details = []
                             
-                            for i in range(len(ordered_visits) - 1):
+                            # Fix: Use ordered indices to access shortest_paths matrix
+                            ordered_indices = [i for i in range(len(ordered_visits))]
+                            
+                            for i in range(len(ordered_indices) - 1):
+                                from_idx = ordered_indices[i]
+                                to_idx = ordered_indices[i + 1]
+                                
                                 from_city = ordered_visits[i]['city']
                                 to_city = ordered_visits[i + 1]['city']
-                                segment_distance = shortest_paths[i][i+1]['distance']
-                                segment_duration = shortest_paths[i][i+1]['duration']
+                                
+                                # Use the correct indices in the shortest_paths matrix
+                                segment_distance = shortest_paths[from_idx][to_idx]['distance']
+                                segment_duration = shortest_paths[from_idx][to_idx]['duration']
                                 
                                 route_details.append({
                                     "From": from_city,
