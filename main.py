@@ -125,17 +125,17 @@ def merge(left, right):
     
     return result
 
-def greedy_knapsack(parcels, max_weight):
+def fractional_greedy_knapsack(parcels, max_weight):
     """
-    Implementation of Greedy Knapsack algorithm to select the most valuable parcels 
-    without exceeding the maximum weight limit.
+    Implementation of Fractional Greedy Knapsack algorithm to select the most valuable parcels 
+    with the possibility of taking fractions of parcels to maximize value.
     
     Args:
         parcels: List of dictionaries containing parcel data including weight and value
         max_weight: Maximum total weight that can be carried
         
     Returns:
-        List of selected parcel indices
+        List of selected parcel dictionaries with added 'fraction' key
     """
     # Calculate value/weight ratio for each parcel
     for i, parcel in enumerate(parcels):
@@ -151,8 +151,39 @@ def greedy_knapsack(parcels, max_weight):
     # Greedily select parcels with highest value/weight ratio
     for parcel in sorted_parcels:
         if current_weight + parcel['weight'] <= max_weight:
-            selected_parcels.append(parcel['original_index'])
+            # Take the whole parcel
+            selected_parcels.append({
+                'original_index': parcel['original_index'],
+                'id': parcel.get('id', parcel['original_index'] + 1),
+                'city': parcel['city'],
+                'weight': parcel['weight'],
+                'value': parcel['value'],
+                'fraction': 1.0,
+                'actual_weight': parcel['weight'],
+                'actual_value': parcel['value']
+            })
             current_weight += parcel['weight']
+        else:
+            # Take a fraction of the parcel
+            remaining_weight = max_weight - current_weight
+            fraction = remaining_weight / parcel['weight']
+            
+            # Only add if there's actually space for a fraction
+            if fraction > 0:
+                selected_parcels.append({
+                    'original_index': parcel['original_index'],
+                    'id': parcel.get('id', parcel['original_index'] + 1),
+                    'city': parcel['city'],
+                    'weight': parcel['weight'],
+                    'value': parcel['value'],
+                    'fraction': fraction,
+                    'actual_weight': remaining_weight,
+                    'actual_value': parcel['value'] * fraction
+                })
+                current_weight = max_weight  # We've now reached capacity
+            
+            # No need to check remaining parcels
+            break
     
     return selected_parcels
 
@@ -172,6 +203,9 @@ def display_route_map(locations, route_coordinates):
     # Add markers for each location
     for i, loc in enumerate(locations):
         popup_text = f"Location {i+1}: {loc['city']}"
+        if i > 0 and 'fraction' in loc and loc['fraction'] < 1.0:
+            popup_text += f" ({loc['fraction']*100:.1f}%)"
+            
         icon_color = 'red' if i == 0 else ('green' if i == len(locations)-1 else 'blue')
         
         folium.Marker(
@@ -199,7 +233,7 @@ def main():
     <div class="info-box">
     Optimize your delivery operations using advanced algorithms:
     <ul>
-        <li>Greedy Knapsack algorithm for optimal parcel selection</li>
+        <li>Fractional Greedy Knapsack algorithm for optimal parcel selection</li>
         <li>Merge Sort algorithm for sorting parcels by value/weight ratio</li>
         <li>Branch and Bound algorithm for route optimization (TSP)</li>
         <li>Real-world routing using OpenRouteService API</li>
@@ -330,34 +364,50 @@ def main():
                         else:
                             st.warning(f"Could not geocode city: {row['city']}")
                     
-                    # Step 2: Apply Greedy Knapsack algorithm to select parcels
+                    # Step 2: Apply Fractional Greedy Knapsack algorithm to select parcels
                     locations_df = pd.DataFrame(locations[1:])  # Exclude starting point
                     
-                    # Convert DataFrame to list of dictionaries for greedy knapsack
+                    # Convert DataFrame to list of dictionaries for fractional greedy knapsack
                     parcels_list = locations_df.to_dict('records')
-                    selected_indices = greedy_knapsack(parcels_list, max_weight)
+                    selected_parcels_list = fractional_greedy_knapsack(parcels_list, max_weight)
                     
-                    if not selected_indices:
+                    if not selected_parcels_list:
                         st.error("No parcels could be selected within the weight constraint.")
                         return
                     
                     # Create a list of selected locations (including start point)
                     selected_locations = [locations[0]]  # Starting point
-                    for idx in selected_indices:
-                        selected_locations.append(locations[idx + 1])  # +1 because indices are for locations_df
+                    for parcel in selected_parcels_list:
+                        # Make a copy of the location and add fraction data
+                        location_copy = locations[parcel['original_index'] + 1].copy()
+                        location_copy['fraction'] = parcel['fraction']
+                        location_copy['actual_weight'] = parcel['actual_weight']
+                        location_copy['actual_value'] = parcel['actual_value']
+                        selected_locations.append(location_copy)
                     
-                    # Display selected parcels
-                    selected_parcels = locations_df.iloc[selected_indices].copy()
+                    # Convert selected parcels to DataFrame for display
+                    selected_parcels_df = pd.DataFrame(selected_parcels_list)
+                    
+                    # Add percentage column for clarity
+                    selected_parcels_df['Percentage'] = selected_parcels_df['fraction'] * 100
+                    
+                    # Format display DataFrame
+                    display_df = selected_parcels_df[['id', 'city', 'weight', 'value', 'fraction', 'actual_weight', 'actual_value', 'Percentage']]
+                    display_df.columns = ['ID', 'City', 'Total Weight', 'Total Value', 'Fraction', 'Actual Weight', 'Actual Value', 'Percentage (%)']
+                    
+                    # Calculate totals
+                    total_actual_weight = selected_parcels_df['actual_weight'].sum()
+                    total_actual_value = selected_parcels_df['actual_value'].sum()
                     
                     st.subheader("Selected Parcels")
                     st.markdown(f"""
                     <div class="success-box">
-                        <p>Optimally selected {len(selected_parcels)} parcels out of {len(parcels_df)} available.</p>
-                        <p>Total Weight: {selected_parcels['weight'].sum():.2f} kg out of {max_weight:.2f} kg maximum.</p>
-                        <p>Total Value: ${selected_parcels['value'].sum()}</p>
+                        <p>Optimally selected {len(selected_parcels_df)} parcels/partial parcels out of {len(parcels_df)} available.</p>
+                        <p>Total Weight: {total_actual_weight:.2f} kg out of {max_weight:.2f} kg maximum.</p>
+                        <p>Total Value: ${total_actual_value:.2f}</p>
                     </div>
                     """, unsafe_allow_html=True)
-                    st.dataframe(selected_parcels)
+                    st.dataframe(display_df)
                     
                     # Step 3: Apply Branch and Bound algorithm for TSP
                     st.subheader("Shortest Paths Between Selected Cities")
@@ -369,11 +419,19 @@ def main():
                         
                         # Display results
                         if shortest_paths:
+                            # Create a version of the route with fractions shown for display
+                            display_route = []
+                            for loc in ordered_visits:
+                                city_name = loc['city']
+                                if 'fraction' in loc and loc['fraction'] < 1.0:
+                                    city_name += f" ({loc['fraction']*100:.1f}%)"
+                                display_route.append(city_name)
+                            
                             st.markdown(f"""
                             <div class="stats-box">
                                 <p>Total Distance: {total_distance:.2f} km</p>
                                 <p>Estimated Total Duration: {format_duration(total_duration)}</p>
-                                <p>Delivery Sequence: {' → '.join([loc['city'] for loc in ordered_visits])}</p>
+                                <p>Delivery Sequence: {' → '.join(display_route)}</p>
                             </div>
                             """, unsafe_allow_html=True)
                             
@@ -390,6 +448,8 @@ def main():
                                 
                                 from_city = ordered_visits[i]['city']
                                 to_city = ordered_visits[i + 1]['city']
+                                if 'fraction' in ordered_visits[i + 1] and ordered_visits[i + 1]['fraction'] < 1.0:
+                                    to_city += f" ({ordered_visits[i + 1]['fraction']*100:.1f}%)"
                                 
                                 # Use the correct indices in the shortest_paths matrix
                                 segment_distance = shortest_paths[from_idx][to_idx]['distance']
